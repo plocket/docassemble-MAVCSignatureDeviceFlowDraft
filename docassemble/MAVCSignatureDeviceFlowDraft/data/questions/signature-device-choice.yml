@@ -1,0 +1,236 @@
+metadata:
+  title: Device choice for signature
+  short: Signature via device
+
+# DEVELOPER: Include this at the top of your script before your other code.
+# You can customize this and override the text and code in here.
+# Shared content and functionality will continue to be worked on and improved,
+# as well as translated, so it might be worth keeping what you can.
+
+# TODO: Discuss removing placeholders - keeping them could make it a decent stand-alone and show example use.
+# TODO: Should the final screen just have the document? Out of scope?
+# TODO: On court approved forms, should one user be able to send it to the court once everyone has signed it? Maybe that is out of scope for this functionality.
+# TODO: `task_not_yet_performed('send signature link')` - allow only one sending of the link?
+---
+comment: |
+  include:
+    - docassemble.MAVirtualCourt:basic-questions.yml
+  ---
+  objects:
+    - example_people: PeopleList
+  ---
+  id: interview_order
+  mandatory: True
+  code: |
+    for example_person in example_people:
+      example_person.signer_id_assigned
+      example_person.sent_to_signature
+  ---
+  modules:  
+    - docassemble.VirtualCourtToolbox.shortenURL
+  ---
+  # DEVELOPER: You can override this with your own object if needed, but if you want to manage what goes into it, you also need to make your own block to define `x.signer_id_assigned` like the example below.
+  objects:
+    - signers: DADict.using(auto_gather=False)
+  ---
+  id: gather people that will be coming back here
+  # DEVELOPER: You MUST ask for your_person.signer_id_assigned
+  generic object: Individual
+  code: |
+    if not x.signer_id_assigned:
+      signers[ x.signer_id ] = x
+    x.signer_id_assigned = True
+  ---
+  # TODO: Do we want to send the whole interview url to the signer, or just the signature question?
+  generic object: Individual
+  id: set interview signer id
+  code: |
+    import random
+    import string
+    random_num_list = random.choice(string.ascii_lowercase) for index in range(10)
+    x.signer_id = ''.join( random_num_list )
+---
+# If needed, offer them a way to send the link to another device.
+# Direct them to the signature.
+id: generic signature flow
+generic object: Individual
+code: |
+  if x.started_on_phone or x.signature_choice == 'this device':
+    x.signature  # DEVELOPER: Define this
+
+  # If they're on a PC and decided to sign on a different device
+  else:
+    x.saw_device_choice = True  # Since they won't see that question
+    x.saw_link_sending_options
+    if defined( x.instanceName + '.mobile_number' ) and x.mobile_number:
+      x.send_sms_signature_link  # DEVELOPER: Define this
+      # TODO: Test if going to that link puts them through this loop again
+
+  x.sent_to_signature = True
+---
+id: which device
+generic object: Individual
+code: |
+  x.started_on_phone = device().is_mobile
+---
+comment: |
+  generic object: Individual
+  id: signature link placeholder
+  template: x.signature_sms_template
+  content: |
+    ${ x }, use this link to sign the document.
+
+    ${ x.signature_url }
+  ---
+  # Supposed to be replaced by your custom code
+  id: generic send sms
+  generic object: Individual
+  code: |
+    x.signature_url = interview_url_action('authorize', signer_id = x.signer_id)
+    send_sms(task ='send signature link', to = x.mobile_number, template = x.signature_sms_template)
+    x.send_sms_signature_link = True
+---
+id: signature device choice
+generic object: Individual
+decoration: file-signature
+question: |
+  ${ device_choice_question_title }
+subquestion: |
+  ${ device_choice_subquestion }
+field: x.signature_choice
+buttons:  
+  - Sign on my phone: phone
+    image: mobile-alt
+  - Sign on this computer: this device
+    image: desktop
+continue button field: x.saw_device_choice
+script: |
+  <script>
+    $(".da-field-buttons > div > .btn-da-custom").last().after("<br>")
+    $(".da-field-buttons > div > .btn-da-custom").first().before("<br>")
+  </script>
+---
+id: signature device choice question
+template: device_choice_question_title
+content: |
+  Sign your court forms
+---
+id: signature device choice subquestion
+template: device_choice_subquestion
+content: |
+  Your forms are almost ready. You need to sign them first. Use the mouse or touchpad on your computer or sign with your finger on your phone. 
+   
+  You can send the forms to someone else to sign if you choose the "phone" option.
+---
+id: provide phone signature link
+# DEVELOPER: You need to define `x.interview_url_qr` with `interview_url_as_qr()`. 
+# TODO: Provide email option too?
+generic object: Individual
+question: |
+  ${ interview_link_for_mobile_question_title }
+subquestion: |
+  ${ interview_link_for_mobile_subquestion }
+fields:
+  - note: |
+      <center>
+      ${ x.interview_url_qr }
+      </center>
+  - Text me a link instead: x.wants_a_text
+    datatype: yesnowide
+  - Cell phone number: x.mobile_number
+    datatype: phone
+    show if: x.wants_a_text
+help: |
+  Many smartphones will automatically find the picture on this screen when you use the camera app. The link may "float" up from the screen into a small icon you can tap. If your phone does not do this, text yourself a link instead.
+
+continue button field: x.saw_link_sending_options
+---
+id: interview link for mobile
+template: interview_link_for_mobile_question_title
+content: |
+  Sign your forms on your phone
+---
+id: interview link for mobile
+template: interview_link_for_mobile_subquestion
+content: |
+  1. Open the camera app or barcode reader app on your phone.
+  1. Point it at the screen.
+  1. Tap the link icon that appears on the camera screen.
+  1. Tap ${word("Next")} on your phone.
+  1. Come back here and tap ${word("Next")} when you are done.
+---
+comment: |
+  # ==============
+  # USER ARRIVES VIA LINK
+  # ==============
+  ---
+  # DEVELOPER: Replace this with your flow if needed
+  #    codefendant.instanceName + '.signature',
+  id: on arrival from link
+  event: ask_for_signature
+  code: |
+    # No new code gets run after a `force_ask`
+    if action_argument('code') not in signatories:
+      force_ask('unauthorized')
+    codefendant = signatories[action_argument('code')]
+    if codefendant.signed:
+      force_ask(codefendant.instanceName + '.thanked')
+    force_ask(codefendant.instanceName + '.willing_to_sign',
+      codefendant.instanceName + '.sent_to_signature',
+      { 'recompute': [ codefendant.instanceName + '.signature_handling_completed' ] },
+      codefendant.instanceName + '.thanked')
+  ---
+
+  ---
+  id: on arrival from link
+  event: authorize
+  code: |
+    signer_id = action_argument( 'signer_id' )
+
+    if signer_id not in signers:
+      force_ask('unauthorized')
+    else:
+      sign_and_finish
+  ---
+  id: 404
+  event: unauthorized
+  code: |
+    response('Page not found', response_code=404)
+  ---
+  id: on arrival from link
+  event: sign_and_finish
+  code: |
+    signer = sigerns[ signer_id ]
+    if not signer.signed:
+      if signer.willing_to_sign:
+        # If needed, offer the device choice. If not, ask for signature.
+        # Need `reconsider()`?
+        signer.sent_to_signature
+    signer.completely_finished
+  ---
+  id: form preview placeholder
+  generic object: Individual
+  question: |
+    Placeholder: Do you agree to sign this document?
+  subquestion: |
+    Attachment varible would go here in Mako brackets
+  yesno: x.willing_to_sign
+  ---
+  id: generic signature
+  generic object: Individual
+  question: |
+    Sign your name
+  signature: x.signature
+  under: |
+    ${ x }
+  continue button field: x.signed
+  ---
+  id: generic after-signature flow
+  code: |
+    x.final_screen
+  ---
+  id: generic final screen
+  generic object: Individual
+  event: x.final_screen
+  question: |
+    Thank you for your signature
